@@ -24,13 +24,13 @@ fn is_docker_linux_available() -> bool {
 #[test]
 fn test_docker_linux_execution() {
     if !is_docker_linux_available() {
-        println!(
-            "Docker Linux container engine is not available; skipping Linux container test."
-        );
+        println!("Docker Linux container engine is not available; skipping Linux container test.");
         return;
     }
 
-    println!("Docker Linux engine is available! Running full Linux verification inside container...");
+    println!(
+        "Docker Linux engine is available! Running full Linux verification inside container..."
+    );
 
     let workspace_dir = std::env::current_dir().expect("current dir");
     let workspace_str = workspace_dir.to_str().expect("workspace path str");
@@ -58,7 +58,9 @@ fn test_docker_linux_execution() {
 #[test]
 fn test_docker_linux_live_socket_discovery() {
     if !is_docker_linux_available() {
-        println!("Docker Linux container engine is not available; skipping live Linux socket discovery test.");
+        println!(
+            "Docker Linux container engine is not available; skipping live Linux socket discovery test."
+        );
         return;
     }
 

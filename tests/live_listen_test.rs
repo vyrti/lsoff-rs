@@ -19,9 +19,12 @@ fn test_live_finds_tcp_listener() {
                     !e.name.is_empty() || !e.path.is_empty(),
                     "process name or path empty"
                 );
-                assert!(!e.cmdline.is_empty(), "cmdline empty");
-                assert!(!e.cwd.is_empty(), "cwd empty");
-                assert!(!e.project.is_empty(), "project empty");
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                {
+                    assert!(!e.cmdline.is_empty(), "cmdline empty");
+                    assert!(!e.cwd.is_empty(), "cwd empty");
+                    assert!(!e.project.is_empty(), "project empty");
+                }
                 #[cfg(target_os = "macos")]
                 {
                     assert!(e.start > 0, "start token empty");

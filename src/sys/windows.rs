@@ -229,11 +229,22 @@ fn query_process(pid: u32) -> ProcInfo {
         let start = process_start_token(handle).unwrap_or(0);
         CloseHandle(handle);
 
+        let (cmdline, cwd) = if pid == std::process::id() {
+            let cmd = std::env::args().collect::<Vec<_>>().join(" ");
+            let dir = std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(ToString::to_string))
+                .unwrap_or_default();
+            (cmd, dir)
+        } else {
+            (String::new(), String::new())
+        };
+
         ProcInfo {
             name,
             path,
-            cmdline: String::new(),
-            cwd: String::new(),
+            cmdline,
+            cwd,
             start,
         }
     }

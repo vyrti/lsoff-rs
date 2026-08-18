@@ -126,29 +126,20 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install dependencies for ARM cross-compile (Linux)
+      - name: Install cross-linker for Linux ARM
         if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
-          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
-            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
-          fi
-      - name: Configure cross-linker (Linux ARM)
-        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
-        run: |
-          mkdir -p ~/.cargo "$HOME/bin"
-          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            mkdir -p ~/.cargo
             echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
             echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
-            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> "$GITHUB_ENV"
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            mkdir -p ~/.cargo
             echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
             echo 'linker = "arm-linux-gnueabihf-gcc"' >> ~/.cargo/config.toml
-            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> "$GITHUB_ENV"
-            echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++" >> "$GITHUB_ENV"
           fi
       - name: Build target
         if: matrix.target != 'x86_64-unknown-freebsd'
@@ -265,29 +256,20 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install dependencies for ARM cross-compile (Linux)
+      - name: Install cross-linker for Linux ARM
         if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
-          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
-            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
-          fi
-      - name: Configure cross-linker (Linux ARM)
-        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
-        run: |
-          mkdir -p ~/.cargo "$HOME/bin"
-          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            mkdir -p ~/.cargo
             echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
             echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
-            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> "$GITHUB_ENV"
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            mkdir -p ~/.cargo
             echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
             echo 'linker = "arm-linux-gnueabihf-gcc"' >> ~/.cargo/config.toml
-            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> "$GITHUB_ENV"
-            echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++" >> "$GITHUB_ENV"
           fi
       - name: Build release binary
         if: matrix.target != 'x86_64-unknown-freebsd'
