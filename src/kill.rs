@@ -2,7 +2,7 @@ use crate::model::Ident;
 use std::process;
 
 /// Error type for kill operation failures.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KillError {
     InvalidPid(i32),
     RefusePid1,

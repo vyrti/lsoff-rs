@@ -27,6 +27,7 @@ pub struct Timeval {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct KinfoProc {
     pub ki_structsize: c_int,
     pub ki_layout: c_int,
@@ -118,6 +119,7 @@ pub struct KinfoProc {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct KinfoFile {
     pub kf_structsize: c_int,
     pub kf_type: c_int,

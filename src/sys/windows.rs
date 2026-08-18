@@ -60,7 +60,7 @@ struct MibUdp6RowOwnerPid {
     owning_pid: u32,
 }
 
-extern "system" {
+unsafe extern "system" {
     fn GetExtendedTcpTable(
         pTcpTable: *mut std::ffi::c_void,
         pdwSize: *mut u32,
@@ -202,12 +202,17 @@ fn query_process(pid: u32) -> ProcInfo {
 
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle == 0 {
+        if handle.is_null() {
             return ProcInfo::default();
         }
 
         let mut buf = [0u16; 1024];
-        let len = K32GetModuleFileNameExW(handle, 0, buf.as_mut_ptr(), buf.len() as u32);
+        let len = K32GetModuleFileNameExW(
+            handle,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+        );
         let path = if len > 0 {
             OsString::from_wide(&buf[..len as usize])
                 .to_string_lossy()
@@ -234,7 +239,9 @@ fn query_process(pid: u32) -> ProcInfo {
     }
 }
 
-unsafe fn process_start_token(handle: isize) -> Result<u64, KillError> {
+unsafe fn process_start_token(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<u64, KillError> {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::GetProcessTimes;
 
@@ -255,7 +262,8 @@ unsafe fn process_start_token(handle: isize) -> Result<u64, KillError> {
         dwHighDateTime: 0,
     };
 
-    if GetProcessTimes(handle, &mut created, &mut exit, &mut kernel, &mut user) == 0 {
+    let ret = unsafe { GetProcessTimes(handle, &mut created, &mut exit, &mut kernel, &mut user) };
+    if ret == 0 {
         return Err(KillError::System("GetProcessTimes failed".to_string()));
     }
 
@@ -268,7 +276,7 @@ pub fn proc_start_token(pid: i32) -> Result<u64, KillError> {
 
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
-        if handle == 0 {
+        if handle.is_null() {
             return Err(KillError::System(format!(
                 "OpenProcess failed for pid {pid}"
             )));
@@ -293,7 +301,7 @@ pub fn kill_process(id: Ident) -> Result<(), KillError> {
             0,
             id.pid as u32,
         );
-        if handle == 0 {
+        if handle.is_null() {
             return Err(KillError::System(format!(
                 "OpenProcess failed for pid {}",
                 id.pid
@@ -301,7 +309,7 @@ pub fn kill_process(id: Ident) -> Result<(), KillError> {
         }
 
         let cur = process_start_token(handle);
-        if cur.as_ref() != Ok(&id.start) {
+        if cur != Ok(id.start) {
             CloseHandle(handle);
             return Err(KillError::IdentityMismatch);
         }
