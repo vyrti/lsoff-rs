@@ -1,28 +1,41 @@
 use std::process::Command;
 
-fn is_docker_available() -> bool {
-    Command::new("docker")
-        .args(["info"])
+fn is_docker_linux_available() -> bool {
+    // Windows CI runners run Windows container daemon (or lack Linux volume mapping support)
+    if cfg!(windows) {
+        return false;
+    }
+
+    let output = Command::new("docker")
+        .args(["info", "--format", "{{.OSType}}"])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok();
+
+    if let Some(out) = output
+        && out.status.success()
+    {
+        let os_type = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+        return os_type == "linux";
+    }
+
+    false
 }
 
 #[test]
 fn test_docker_linux_execution() {
-    if !is_docker_available() {
+    if !is_docker_linux_available() {
         println!(
-            "Docker is not available or daemon is not running; skipping Linux container test."
+            "Docker Linux container engine is not available; skipping Linux container test."
         );
         return;
     }
 
-    println!("Docker is available! Running full Linux verification inside Docker container...");
+    println!("Docker Linux engine is available! Running full Linux verification inside container...");
 
     let workspace_dir = std::env::current_dir().expect("current dir");
     let workspace_str = workspace_dir.to_str().expect("workspace path str");
 
-    // Run cargo test inside Linux container with an isolated target directory in /tmp
+    // Run cargo test inside Linux container with an isolated target directory in /tmp/target_linux_exec
     let status = Command::new("docker")
         .args([
             "run",
@@ -34,7 +47,7 @@ fn test_docker_linux_execution() {
             "rust:1.97-bookworm",
             "sh",
             "-c",
-            "cargo test --target-dir /tmp/target_linux --test cli_test --test filter_test --test format_test --test group_test --test sanitize_test --test services_test && cargo build --release --target-dir /tmp/target_linux && /tmp/target_linux/release/lsoff-rs --help && /tmp/target_linux/release/lsoff-rs --version",
+            "cargo test --target-dir /tmp/target_linux_exec --test cli_test --test filter_test --test format_test --test group_test --test sanitize_test --test services_test && cargo build --release --target-dir /tmp/target_linux_exec && /tmp/target_linux_exec/release/lsoff-rs --help && /tmp/target_linux_exec/release/lsoff-rs --version",
         ])
         .status()
         .expect("failed to execute docker run");
@@ -44,8 +57,8 @@ fn test_docker_linux_execution() {
 
 #[test]
 fn test_docker_linux_live_socket_discovery() {
-    if !is_docker_available() {
-        println!("Docker is not available; skipping live Linux socket discovery test.");
+    if !is_docker_linux_available() {
+        println!("Docker Linux container engine is not available; skipping live Linux socket discovery test.");
         return;
     }
 
@@ -55,7 +68,7 @@ fn test_docker_linux_live_socket_discovery() {
     // Run a script inside Linux that spawns a real background TCP listener and verifies lsoff discovery
     let script = r#"
 set -e
-cargo build --release --target-dir /tmp/target_linux
+cargo build --release --target-dir /tmp/target_linux_live
 
 # Start a background listener on port 9876
 python3 -m http.server 9876 &
@@ -63,7 +76,7 @@ SERVER_PID=$!
 sleep 1
 
 echo "Testing Linux socket discovery for port 9876..."
-OUTPUT=$(/tmp/target_linux/release/lsoff-rs 9876)
+OUTPUT=$(/tmp/target_linux_live/release/lsoff-rs 9876)
 echo "$OUTPUT"
 
 # Verify table output contains port 9876 and python
@@ -71,7 +84,7 @@ echo "$OUTPUT" | grep "9876"
 echo "$OUTPUT" | grep -i "python"
 
 # Verify JSON output contains port 9876
-JSON_OUTPUT=$(/tmp/target_linux/release/lsoff-rs --json 9876)
+JSON_OUTPUT=$(/tmp/target_linux_live/release/lsoff-rs --json 9876)
 echo "$JSON_OUTPUT"
 echo "$JSON_OUTPUT" | grep '"port": 9876'
 
