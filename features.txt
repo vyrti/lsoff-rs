@@ -1,0 +1,398 @@
+================================================================================
+                         lsoff-rs  —  Feature Roadmap
+================================================================================
+
+Current: v0.1.x  —  Listener discovery CLI + TUI
+Platforms: macOS (libproc), Linux (Netlink sock_diag), Windows (IP Helper),
+           FreeBSD (KERN_PROC_FILEDESC kinfo_file)
+
+================================================================================
+  WHAT WE ALREADY HAVE
+================================================================================
+
+  [x] TCP + UDP listener discovery on macOS, Linux, Windows, FreeBSD
+  [x] Interactive TUI (ratatui): search, sort, fold/expand, kill, clipboard
+  [x] CLI table + JSON output
+  [x] CIDR subnet filtering (127.0.0.0/8, fe80::/10, ::1/128)
+  [x] Service name resolution (80+ well-known ports)
+  [x] Process metadata: path, cmdline, cwd, project name
+  [x] Multi-core parallel enumeration (rayon work-stealing)
+  [x] Cross-platform CI (Linux, macOS, Windows, FreeBSD x86_64)
+  [x] kqueue process watcher (macOS) for reactive TUI refresh
+  [x] eBPF engine stub (ready for aya integration)
+  [x] crates.io publish-ready Cargo.toml
+
+
+================================================================================
+  CLI POWER FEATURES                               [ LOW EFFORT ]
+================================================================================
+
+  [ ] Port range filtering
+        lsoff-rs 8000-8100        # show listeners in range
+        lsoff-rs -k 3000-3010     # kill all in range
+      Parse N-M in positional arg, add filter_port_range(entries, lo, hi).
+
+  [ ] --watch / -w mode (CLI auto-refresh)
+        lsoff-rs -w 8080          # refresh every 2s (default)
+        lsoff-rs -w 3 --json 8080 # refresh every 3s, JSON output
+      Reuse TUI's auto-refresh logic in a simple CLI loop + clear screen.
+      Useful for CI pipelines waiting for a service to come up.
+
+  [ ] --quiet / -q0 exit code semantics
+        lsoff-rs 8080 --quiet && echo "in use" || echo "free"
+      Exit 0 if port is in use, exit 1 if free. Suppress output.
+      Essential for shell scripts, Makefiles, CI health checks.
+
+  [ ] --csv / --tsv output
+        lsoff-rs --csv 8080 | cut -d, -f1,2,5
+      Machine-readable delimited output for piping into awk/cut/etc.
+
+  [ ] --no-header flag
+        lsoff-rs --no-header 8080 | awk '{print $4}'
+      Suppress column headers in table/CSV output for cleaner scripting.
+
+  [ ] --sort flag for CLI
+        lsoff-rs --sort pid
+        lsoff-rs --sort port:desc
+      Sort support outside of TUI (currently only interactive).
+
+
+================================================================================
+  ESTABLISHED CONNECTIONS + USER INFO              [ MEDIUM EFFORT ]
+================================================================================
+
+  [ ] --all / -a: show established + listening sockets
+        lsoff-rs -a              # all sockets (listen + established)
+        lsoff-rs -a nginx        # all connections for nginx
+      Kernel APIs already return established connections — just filtered out.
+      Adds remote peer addr:port column.
+
+  [ ] Socket state column (when --all)
+        LISTEN, ESTABLISHED, TIME_WAIT, CLOSE_WAIT, SYN_SENT, etc.
+      Linux: INET_DIAG returns state directly.
+      macOS: proc_pidfdinfo SOCKET_INFO includes tcp_si_state.
+      FreeBSD: kf_sock has state in newer structs.
+      Windows: GetExtendedTcpTable returns dwState.
+
+  [ ] User/UID column
+        PROTO  PORT  ADDRESS      PID   USER     PROCESS
+        tcp    80    0.0.0.0      1234  www-data nginx
+      Linux: /proc/<pid>/status -> Uid line.
+      macOS: kinfo_proc ki_uid.
+      FreeBSD: kinfo_proc ki_uid.
+      Windows: OpenProcessToken + LookupAccountSid.
+
+  [ ] --output / -o custom column selection
+        lsoff-rs -o proto,port,pid,name 8080
+      Let users choose which columns to display (like ps -o).
+
+  [ ] Docker container socket attribution
+        PROTO  PORT  ADDRESS      PID   CONTAINER        PROCESS
+        tcp    8080  0.0.0.0      1234  my-nginx-ctr     nginx
+      Linux: read /proc/<pid>/cgroup -> extract container ID.
+      Query Docker socket /var/run/docker.sock for container name.
+
+
+================================================================================
+  DISTRIBUTION                                     [ LOW EFFORT ]
+================================================================================
+
+  [ ] Shell completions (bash, zsh, fish)
+        lsoff-rs --completions zsh > _lsoff-rs
+      Hand-written generator (~50 lines per shell). No clap dependency.
+
+  [ ] Homebrew tap
+        brew tap vyrti/tap && brew install lsoff-rs
+      Create vyrti/homebrew-tap repo with formula pointing to GitHub Releases.
+
+  [ ] AUR package (Arch Linux)
+      PKGBUILD pointing to GitHub releases or cargo install.
+
+  [ ] Nix flake
+      flake.nix with cargo build derivation.
+
+  [ ] Man page generation
+      Hand-written or generated from --help output.
+
+
+================================================================================
+  eBPF REAL-TIME ENGINE (aya)                      [ HIGH EFFORT ]
+================================================================================
+
+  Full in-kernel eBPF socket lifecycle tracing via aya framework.
+  Replaces polling with zero-cost kernel-push event stream.
+  Linux only. Requires CAP_BPF / root. Kernel >= 5.8 for RingBuf.
+
+
+  --- ARCHITECTURE ---
+
+  Workspace restructure (aya canonical layout):
+
+    lsoff-rs/
+    ├── Cargo.toml                    # workspace root
+    ├── lsoff-rs/                     # userspace binary (current src/)
+    │   ├── Cargo.toml
+    │   └── src/
+    ├── lsoff-rs-ebpf/                # kernel-side eBPF programs (no_std)
+    │   ├── Cargo.toml
+    │   └── src/
+    │       └── main.rs
+    ├── lsoff-rs-common/              # shared #[repr(C)] event structs
+    │   ├── Cargo.toml
+    │   └── src/
+    │       └── lib.rs
+    └── xtask/                        # cargo xtask build-ebpf automation
+        ├── Cargo.toml
+        └── src/
+            └── main.rs
+
+
+  --- SHARED EVENT TYPES (lsoff-rs-common/src/lib.rs) ---
+
+    #![no_std]
+
+    /// Event types pushed from kernel to userspace via RingBuf.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub enum SocketEventKind {
+        ListenStart = 0,    // TCP socket entered LISTEN state
+        ListenStop  = 1,    // TCP socket left LISTEN state (close)
+        UdpBind     = 2,    // UDP socket bound to port
+        UdpClose    = 3,    // UDP socket closed
+        StateChange = 4,    // TCP state transition (for --all mode)
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct SocketEvent {
+        pub kind:      u32,       // SocketEventKind
+        pub pid:       u32,       // tgid (userspace PID)
+        pub tid:       u32,       // thread ID
+        pub af:        u16,       // AF_INET (2) or AF_INET6 (10)
+        pub proto:     u8,        // IPPROTO_TCP (6) or IPPROTO_UDP (17)
+        pub pad:       u8,
+        pub sport:     u16,       // local port (host byte order)
+        pub dport:     u16,       // remote port (0 for listeners)
+        pub saddr:     [u8; 16],  // local address (4 bytes IPv4, 16 bytes IPv6)
+        pub daddr:     [u8; 16],  // remote address
+        pub old_state: u8,        // previous TCP state
+        pub new_state: u8,        // new TCP state
+        pub comm:      [u8; 16],  // process comm (TASK_COMM_LEN)
+        pub timestamp: u64,       // ktime_get_ns()
+    }
+
+    // Size: 80 bytes per event (fits in eBPF stack, cache-line friendly)
+
+    #[cfg(feature = "user")]
+    unsafe impl aya::Pod for SocketEvent {}
+
+
+  --- KERNEL-SIDE eBPF PROGRAMS (lsoff-rs-ebpf/src/main.rs) ---
+
+    #![no_std]
+    #![no_main]
+
+    Tracepoints to attach:
+
+    1. sock:inet_sock_set_state  (kernel >= 4.16)
+       - Fires on EVERY TCP state transition.
+       - Fields: protocol, oldstate, newstate, sport, dport, saddr, daddr, family.
+       - Filter: newstate == TCP_LISTEN → emit ListenStart event.
+       - Filter: oldstate == TCP_LISTEN → emit ListenStop event.
+       - Filter: newstate == TCP_ESTABLISHED → emit StateChange (for --all).
+       - This single tracepoint replaces both inet_csk_listen_start and tcp_close.
+
+    2. kprobe:udp_lib_get_port  (or kprobe:udp_v4_get_port / udp_v6_get_port)
+       - Fires when a UDP socket successfully binds to a port.
+       - Extract: sk->__sk_common.skc_num (bound port).
+       - Emit UdpBind event.
+
+    3. kprobe:udp_destroy_sock  (or tracepoint:udp:udp_destroy_sock if available)
+       - Fires when a UDP socket is being torn down.
+       - Emit UdpClose event.
+
+    Maps:
+
+    #[map]
+    static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
+    //
+    // 256 KB ring buffer. At 80 bytes/event, holds ~3200 events before wrap.
+    // RingBuf (kernel >= 5.8) provides:
+    //   - Single shared buffer across all CPUs (no per-CPU waste)
+    //   - Strong event ordering (unlike PerfEventArray)
+    //   - Zero-copy reserve/commit pattern (no stack copies)
+    //   - Automatic drop counting
+
+    Event emission pattern (reserve-commit, avoids 512-byte stack limit):
+
+    fn emit_event(kind: u32, ctx: &TracePointContext, ...) {
+        if let Some(mut entry) = EVENTS.reserve::<SocketEvent>(0) {
+            let ev = entry.as_mut_ptr();
+            unsafe {
+                (*ev).kind = kind;
+                (*ev).pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+                (*ev).sport = sport;
+                // ... fill remaining fields
+                bpf_get_current_comm(&mut (*ev).comm);
+                (*ev).timestamp = bpf_ktime_get_ns();
+            }
+            entry.submit(0);
+        }
+    }
+
+
+  --- USERSPACE INTEGRATION (lsoff-rs/src/sys/ebpf.rs) ---
+
+    Current stub becomes real engine:
+
+    pub struct EbpfSocketEngine {
+        bpf:    Option<Ebpf>,
+        ring:   Option<RingBuf<MapData>>,
+        active: AtomicBool,
+        events: Arc<Mutex<VecDeque<SocketEvent>>>,
+    }
+
+    impl EbpfSocketEngine {
+        pub fn try_attach(&mut self) -> Result<(), Error> {
+            // 1. Load embedded eBPF bytecode
+            //    let mut bpf = Ebpf::load(include_bytes_aligned!(
+            //        "../../target/bpfel-unknown-none/release/lsoff-rs-ebpf"
+            //    ))?;
+            //
+            // 2. Attach tracepoint: sock/inet_sock_set_state
+            //    let tp: &mut TracePoint = bpf.program_mut("inet_sock_set_state")...;
+            //    tp.load()?;
+            //    tp.attach("sock", "inet_sock_set_state")?;
+            //
+            // 3. Attach kprobes for UDP
+            //    let kp: &mut KProbe = bpf.program_mut("udp_lib_get_port")...;
+            //    kp.load()?;
+            //    kp.attach("udp_lib_get_port", 0)?;
+            //
+            // 4. Get RingBuf handle
+            //    self.ring = Some(RingBuf::try_from(bpf.map_mut("EVENTS")?)?);
+            //
+            // 5. Spawn background drain thread
+            //    self.active.store(true, Ordering::SeqCst);
+            //    thread::spawn(move || drain_loop(ring, events_clone));
+        }
+
+        pub fn drain_events(&self) -> Vec<Entry> {
+            // Convert buffered SocketEvent -> model::Entry
+            // Enrich with process path/cmdline/cwd from /proc/<pid>/
+        }
+    }
+
+
+  --- BUILD SYSTEM (xtask/src/main.rs) ---
+
+    cargo xtask build-ebpf:
+      1. Invoke cargo build on lsoff-rs-ebpf/ with:
+           --target bpfel-unknown-none
+           -Z build-std=core
+           RUSTFLAGS containing bpf-linker path
+      2. Output: target/bpfel-unknown-none/release/lsoff-rs-ebpf
+      3. Embedded into userspace binary via include_bytes_aligned!()
+
+    cargo xtask build:
+      1. Build eBPF first (above)
+      2. Build userspace: cargo build --release
+
+    CI integration:
+      - eBPF build only on Linux (feature-gated behind cfg(feature = "ebpf"))
+      - Non-Linux platforms: stub remains as-is, no eBPF deps pulled in
+      - GitHub Actions: install bpf-linker, nightly toolchain for eBPF crate
+
+
+  --- RUNTIME BEHAVIOR ---
+
+    lsoff-rs (no flags):
+      1. Attempt EbpfSocketEngine::try_attach()
+      2. If CAP_BPF / root / kernel >= 5.8:
+           → eBPF active: real-time push events, zero polling
+           → TUI shows ⚡ indicator in title bar
+      3. If not:
+           → Graceful fallback to existing polling engine
+           → No error, no noise. User doesn't need to know.
+
+    lsoff-rs --ebpf:
+      Force eBPF mode. Error if not available (permission/kernel too old).
+
+    lsoff-rs --no-ebpf:
+      Force polling mode even if eBPF is available.
+
+
+  --- FEATURE GATING ---
+
+    Cargo.toml:
+      [features]
+      default = []
+      ebpf = ["aya", "aya-log"]
+
+    This keeps the default build lightweight (no nightly, no bpf-linker).
+    eBPF is opt-in: cargo build --features ebpf
+
+
+  --- ADVANTAGES OVER POLLING ---
+
+    Current (polling):
+      - list_listeners() → snapshot → sleep 2s → snapshot → diff
+      - Misses short-lived sockets that open and close between polls
+      - CPU cost scales with number of running processes (O(processes))
+
+    eBPF (event-driven):
+      - Kernel pushes events at the exact moment of state change
+      - Zero CPU cost when no sockets change (0% idle overhead)
+      - Catches ALL events including sub-second ephemeral sockets
+      - O(1) per event, independent of total process count
+      - Enriches TUI with real-time open/close animations
+
+
+  --- TRACEPOINT FORMAT REFERENCE ---
+
+    /sys/kernel/debug/tracing/events/sock/inet_sock_set_state/format:
+
+    field:const __u8 * skaddr;       offset:8;  size:8;
+    field:int oldstate;              offset:16; size:4;
+    field:int newstate;              offset:20; size:4;
+    field:__u16 sport;               offset:24; size:2;
+    field:__u16 dport;               offset:26; size:2;
+    field:__u16 family;              offset:28; size:2;
+    field:__u16 protocol;            offset:30; size:2;
+    field:__u8 saddr[4];             offset:32; size:4;
+    field:__u8 daddr[4];             offset:36; size:4;
+    field:__u8 saddr_v6[16];         offset:40; size:16;
+    field:__u8 daddr_v6[16];         offset:56; size:16;
+
+
+================================================================================
+  PER-SOCKET BANDWIDTH COUNTERS                   [ MEDIUM EFFORT ]
+================================================================================
+
+  [ ] Show tx_bytes / rx_bytes per socket
+      Linux: Netlink INET_DIAG returns tcpi_bytes_sent / tcpi_bytes_received.
+      macOS: NetworkStatistics private framework (NStatManager).
+      New columns: TX and RX in human-readable format (e.g., 1.2 MB, 340 KB).
+
+  [ ] Per-process bandwidth aggregation
+      Sum tx/rx across all sockets for same PID.
+      Display in TUI details panel.
+
+
+================================================================================
+  NOTIFICATION / HOOKS                            [ MEDIUM EFFORT ]
+================================================================================
+
+  [ ] --notify: desktop notification on port open/close
+        lsoff-rs --notify 8080   # notify when port 8080 opens or closes
+      macOS: NSUserNotification / UNUserNotificationCenter via objc2.
+      Linux: libnotify / notify-send / D-Bus.
+      Windows: toast notification via windows-sys.
+
+  [ ] --exec: run command on port event
+        lsoff-rs --exec "curl localhost:8080/health" --watch 8080
+      Runs command each time port state changes.
+
+  [ ] --webhook: POST JSON event to URL on change
+        lsoff-rs --webhook https://slack.com/webhook --watch 8080
+      For integration with Slack, Discord, PagerDuty.
