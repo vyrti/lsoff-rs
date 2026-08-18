@@ -1,0 +1,60 @@
+[package]
+name = "lsoff-rs"
+version = "0.1.0"
+edition = "2024"
+authors = ["vyrti"]
+description = "Fast port-focused listener discovery tool (TCP/UDP) with TUI and CLI"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/vyrti/lsoff-rs"
+keywords = ["lsof", "port", "network", "tui", "cli"]
+categories = ["command-line-utilities", "network-programming"]
+include = [
+    "/src/**/*",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
+
+[lib]
+name = "lsoff_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lsoff-rs"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+arboard = "3.6"
+unicode-width = "0.2"
+rayon = "1.12"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
