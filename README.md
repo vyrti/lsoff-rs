@@ -67,15 +67,6 @@
 > **Note**: On macOS, ~5.2–5.5 ms is the fixed OS kernel baseline for `fork() + execve() + dyld` (linker startup). Rust's internal socket enumeration, formatting, and rendering takes **< 0.8 ms**.
 
 ---
-
-### 3. Binary Size & Memory Footprint
-
-| Metric | Go (`lsoff`) | Rust (`lsoff-rs`) | Difference |
-| :--- | :--- | :--- | :--- |
-| **Binary Size** | `5,030.8 KB` (4.91 MB) | **`671.6 KB` (0.66 MB)** | **7.5x smaller** |
-| **Runtime Overhead** | Bundles Go GC, scheduler, reflection | **Zero runtime (pure native binary)** | Instant cold-start |
-
----
 ### Rust vs Go
 
 1. **Zero-Overhead Direct FFI (No CGo Context Switching)**:
@@ -91,15 +82,20 @@
 
 ---
 
-## 💻 Installation
+## Installation
 
 ### Build from Source
 ```bash
+cargo install lsoff-rs
+
 git clone https://github.com/alex/lsoff-rs.git
 cd lsoff-rs
 cargo build --release
 ```
 The optimized binary will be available at `./target/release/lsoff-rs`.
+
+### Downloading
+Take latest release from [GitHub Releases](https://github.com/vyrti/lsoff-rs/releases).
 
 ---
 
@@ -153,21 +149,6 @@ lsoff-rs -k 8080
 
 # Kill without asking (for scripts and CI)
 lsoff-rs -k -y 8080
-```
-
----
-
-## Testing & Code Quality
-
-Run the test suite:
-```bash
-cargo test
-```
-
-Run formatting and linting:
-```bash
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ---

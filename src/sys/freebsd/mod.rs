@@ -199,86 +199,85 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
 }
 
 fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
-    if buf.len() < 44 {
+    // FreeBSD 14.2 sys/user.h struct kinfo_file layout (offsets from struct start):
+    //   0..4    kf_structsize
+    //   4..8    kf_type
+    //   8..12   kf_fd
+    //  12..16   kf_ref_count
+    //  16..20   kf_flags
+    //  20..24   kf_pad0
+    //  24..32   kf_offset (int64_t)
+    //  32..36   kf_vnode_type  (compat) / kf_sock_sendq (kf_sock)
+    //  36..40   kf_sock_domain
+    //  40..44   kf_sock_type   (SOCK_STREAM=1, SOCK_DGRAM=2)
+    //  44..48   kf_sock_protocol (IPPROTO_TCP=6, IPPROTO_UDP=17)
+    //  48..176  kf_sa_local    (struct sockaddr_storage, 128 bytes)
+    // 176..304  kf_sa_peer     (struct sockaddr_storage, 128 bytes)
+    if buf.len() < 176 {
         return None;
     }
 
-    let proto_num = i32::from_ne_bytes(buf[40..44].try_into().ok()?);
-    let sock_type = i32::from_ne_bytes(buf[36..40].try_into().unwrap_or([0; 4]));
+    let sock_domain = i32::from_ne_bytes(buf[36..40].try_into().ok()?);
+    let sock_type = i32::from_ne_bytes(buf[40..44].try_into().ok()?);
+    let sock_protocol = i32::from_ne_bytes(buf[44..48].try_into().ok()?);
 
-    let (proto, is_tcp) = match proto_num {
-        IPPROTO_TCP => (Proto::Tcp, true),
-        IPPROTO_UDP => (Proto::Udp, false),
-        _ => {
-            if sock_type == 1 {
-                (Proto::Tcp, true)
-            } else if sock_type == 2 {
-                (Proto::Udp, false)
-            } else {
-                return None;
-            }
-        }
-    };
-
-    // Scan for local sockaddr (sockaddr_in or sockaddr_in6) in socket data buffer
-    let mut found_addr: Option<(String, u16, usize)> = None;
-
-    // Check standard offsets: 48 (8-byte aligned), 44 (packed), 52, 56
-    let candidate_offsets = [48, 44, 52, 56];
-    for &sa_offset in &candidate_offsets {
-        if buf.len() < sa_offset + 16 {
-            continue;
-        }
-        let sa_len = buf[sa_offset] as usize;
-        let sa_family = buf[sa_offset + 1] as i32;
-
-        if (sa_family == AF_INET && (sa_len == 16 || sa_len == 0))
-            || (sa_family == 0 && buf.len() >= sa_offset + 16)
-        {
-            let port = u16::from_be(u16::from_ne_bytes(
-                buf[sa_offset + 2..sa_offset + 4].try_into().ok()?,
-            ));
-            if port > 0 {
-                let ip = Ipv4Addr::new(
-                    buf[sa_offset + 4],
-                    buf[sa_offset + 5],
-                    buf[sa_offset + 6],
-                    buf[sa_offset + 7],
-                );
-                found_addr = Some((ip.to_string(), port, sa_offset));
-                break;
-            }
-        } else if sa_family == AF_INET6
-            && (sa_len == 28 || sa_len == 0)
-            && buf.len() >= sa_offset + 24
-        {
-            let port = u16::from_be(u16::from_ne_bytes(
-                buf[sa_offset + 2..sa_offset + 4].try_into().ok()?,
-            ));
-            if port > 0 {
-                let ip_bytes: [u8; 16] = buf[sa_offset + 8..sa_offset + 24].try_into().ok()?;
-                let ip = Ipv6Addr::from(ip_bytes);
-                found_addr = Some((ip.to_string(), port, sa_offset));
-                break;
-            }
-        }
+    // Filter to AF_INET / AF_INET6 only
+    if sock_domain != AF_INET && sock_domain != AF_INET6 {
+        return None;
     }
 
-    let (addr, port, sa_offset) = found_addr?;
+    // Determine protocol: prefer kf_sock_protocol, fall back to kf_sock_type
+    let (proto, is_tcp) = match sock_protocol {
+        IPPROTO_TCP => (Proto::Tcp, true),
+        IPPROTO_UDP => (Proto::Udp, false),
+        _ => match sock_type {
+            1 => (Proto::Tcp, true),  // SOCK_STREAM
+            2 => (Proto::Udp, false), // SOCK_DGRAM
+            _ => return None,
+        },
+    };
 
+    // Parse kf_sa_local at fixed offset 48
+    const SA_LOCAL: usize = 48;
+    let sa_len = buf[SA_LOCAL] as usize;
+    let sa_family = buf[SA_LOCAL + 1] as i32;
+
+    let (addr, port) = if sa_family == AF_INET && buf.len() >= SA_LOCAL + 8 {
+        let port = u16::from_be(u16::from_ne_bytes(
+            buf[SA_LOCAL + 2..SA_LOCAL + 4].try_into().ok()?,
+        ));
+        if port == 0 {
+            return None;
+        }
+        let ip = Ipv4Addr::new(
+            buf[SA_LOCAL + 4],
+            buf[SA_LOCAL + 5],
+            buf[SA_LOCAL + 6],
+            buf[SA_LOCAL + 7],
+        );
+        (ip.to_string(), port)
+    } else if sa_family == AF_INET6 && sa_len >= 28 && buf.len() >= SA_LOCAL + 24 {
+        let port = u16::from_be(u16::from_ne_bytes(
+            buf[SA_LOCAL + 2..SA_LOCAL + 4].try_into().ok()?,
+        ));
+        if port == 0 {
+            return None;
+        }
+        let ip_bytes: [u8; 16] = buf[SA_LOCAL + 8..SA_LOCAL + 24].try_into().ok()?;
+        let ip = Ipv6Addr::from(ip_bytes);
+        (ip.to_string(), port)
+    } else {
+        return None;
+    };
+
+    // For TCP: check kf_sa_peer at fixed offset 176 to filter established connections
     if is_tcp {
-        // In FreeBSD kf_sock, kf_sa_peer immediately follows kf_sa_local (+128 bytes).
-        // For an unconnected / listening TCP socket, peer is uninitialized/zeroed (peer_len == 0 or peer_family == 0).
-        // For an outgoing established connection, peer_family is valid (AF_INET/AF_INET6), peer_len > 0, and peer_port > 0.
-        let peer_offset = sa_offset + 128;
-        if buf.len() >= peer_offset + 4 {
-            let peer_len = buf[peer_offset] as usize;
-            let peer_family = buf[peer_offset + 1] as i32;
-            if (peer_family == AF_INET || peer_family == AF_INET6) && peer_len > 0 {
+        const SA_PEER: usize = 176;
+        if buf.len() >= SA_PEER + 4 {
+            let peer_family = buf[SA_PEER + 1] as i32;
+            if peer_family == AF_INET || peer_family == AF_INET6 {
                 let peer_port = u16::from_be(u16::from_ne_bytes(
-                    buf[peer_offset + 2..peer_offset + 4]
-                        .try_into()
-                        .unwrap_or([0; 2]),
+                    buf[SA_PEER + 2..SA_PEER + 4].try_into().unwrap_or([0; 2]),
                 ));
                 if peer_port > 0 {
                     return None;
