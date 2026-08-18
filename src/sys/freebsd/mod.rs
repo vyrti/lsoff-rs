@@ -221,9 +221,9 @@ fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
     };
 
     // Scan for local sockaddr (sockaddr_in or sockaddr_in6) in socket data buffer
-    let mut found_addr: Option<(String, u16)> = None;
+    let mut found_addr: Option<(String, u16, usize)> = None;
 
-    // Check standard offsets: 48 (8-byte aligned), 44 (packed), and incremental 4-byte boundaries
+    // Check standard offsets: 48 (8-byte aligned), 44 (packed), 52, 56
     let candidate_offsets = [48, 44, 52, 56];
     for &sa_offset in &candidate_offsets {
         if buf.len() < sa_offset + 16 {
@@ -245,7 +245,7 @@ fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
                     buf[sa_offset + 6],
                     buf[sa_offset + 7],
                 );
-                found_addr = Some((ip.to_string(), port));
+                found_addr = Some((ip.to_string(), port, sa_offset));
                 break;
             }
         } else if sa_family == AF_INET6
@@ -258,27 +258,27 @@ fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
             if port > 0 {
                 let ip_bytes: [u8; 16] = buf[sa_offset + 8..sa_offset + 24].try_into().ok()?;
                 let ip = Ipv6Addr::from(ip_bytes);
-                found_addr = Some((ip.to_string(), port));
+                found_addr = Some((ip.to_string(), port, sa_offset));
                 break;
             }
         }
     }
 
-    let (addr, port) = found_addr?;
+    let (addr, port, sa_offset) = found_addr?;
 
     if is_tcp {
-        // If TCP socket, verify state if state field is present (offset 304 or 300)
-        for &state_offset in &[304, 300, 308] {
-            if buf.len() >= state_offset + 4 {
-                let state = i32::from_ne_bytes(
-                    buf[state_offset..state_offset + 4]
-                        .try_into()
-                        .unwrap_or([0; 4]),
-                );
-                if state != TCPS_LISTEN && state != 0 {
-                    return None;
-                }
-                break;
+        // In FreeBSD kf_sock, kf_sa_peer immediately follows kf_sa_local (+128 bytes).
+        // For a listening TCP socket, peer port is 0 (unconnected).
+        // For an outgoing established connection, peer port is > 0.
+        let peer_offset = sa_offset + 128;
+        if buf.len() >= peer_offset + 4 {
+            let peer_port = u16::from_be(u16::from_ne_bytes(
+                buf[peer_offset + 2..peer_offset + 4]
+                    .try_into()
+                    .unwrap_or([0; 2]),
+            ));
+            if peer_port > 0 {
+                return None;
             }
         }
     }
