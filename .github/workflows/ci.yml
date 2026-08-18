@@ -314,20 +314,10 @@ jobs:
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}.exe" dist_pkg/
             cp README.md dist_pkg/ || true
             powershell -Command "Compress-Archive -Path 'dist_pkg/*' -DestinationPath '$ASSET_NAME'"
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
-            else
-              powershell -Command "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" > "$ASSET_NAME.sha256"
-            fi
           else
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}" dist_pkg/
             cp README.md dist_pkg/ || true
             tar -czf "$ASSET_NAME" -C dist_pkg .
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
-            else
-              shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
-            fi
           fi
       - name: Upload artifact for release
         uses: actions/upload-artifact@v4
@@ -377,11 +367,6 @@ jobs:
           cp target/release/${{ env.BINARY_NAME }} dist_pkg/
           cp README.md dist_pkg/ || true
           tar -czf "$ASSET_NAME" -C dist_pkg .
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
-          else
-            shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
-          fi
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
