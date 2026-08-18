@@ -17,7 +17,10 @@ pub fn proc_cwd_from_buf(buf: &[u8]) -> String {
         if kf.kf_fd == KF_FD_TYPE_CWD {
             let path_slice = &buf[offset + 32..offset + structsize];
             if let Some(pos) = path_slice.iter().position(|&b| b == 0) {
-                return String::from_utf8_lossy(&path_slice[..pos]).into_owned();
+                let s = String::from_utf8_lossy(&path_slice[..pos]).into_owned();
+                if !s.is_empty() {
+                    return s;
+                }
             }
         }
         offset += structsize;
@@ -41,8 +44,16 @@ pub fn proc_path(pid: i32) -> String {
             && size > 0
         {
             let len = (0..size).find(|&i| buf[i] == 0).unwrap_or(size);
-            return String::from_utf8_lossy(&buf[..len]).into_owned();
+            let s = String::from_utf8_lossy(&buf[..len]).into_owned();
+            if !s.is_empty() {
+                return s;
+            }
         }
+    }
+    if pid == std::process::id() as i32
+        && let Ok(exe) = std::env::current_exe()
+    {
+        return exe.to_string_lossy().into_owned();
     }
     String::new()
 }
@@ -81,33 +92,39 @@ pub fn proc_cmdline(pid: i32) -> String {
             &mut size,
             std::ptr::null_mut(),
             0,
-        ) != 0
-            || size == 0
+        ) == 0
+            && size > 0
         {
-            return String::new();
+            let mut buf = vec![0u8; size];
+            if libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            ) == 0
+            {
+                let args: Vec<String> = buf
+                    .split(|&b| b == 0)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| String::from_utf8_lossy(s).into_owned())
+                    .collect();
+
+                let joined = args.join(" ");
+                if !joined.is_empty() {
+                    return joined;
+                }
+            }
         }
-
-        let mut buf = vec![0u8; size];
-        if libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            buf.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        ) != 0
-        {
-            return String::new();
-        }
-
-        let args: Vec<String> = buf
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect();
-
-        args.join(" ")
     }
+    if pid == std::process::id() as i32 {
+        let args: Vec<String> = std::env::args().collect();
+        if !args.is_empty() {
+            return args.join(" ");
+        }
+    }
+    String::new()
 }
 
 pub fn proc_start_token(pid: i32) -> Result<u64, KillError> {

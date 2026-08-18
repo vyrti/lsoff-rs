@@ -148,6 +148,12 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
                         };
                         cmdline = proc_cmdline(pid);
                         cwd = proc_cwd_from_buf(&buf[..size]);
+                        if cwd.is_empty() && pid == std::process::id() as i32 {
+                            cwd = std::env::current_dir()
+                                .ok()
+                                .and_then(|p| p.to_str().map(ToString::to_string))
+                                .unwrap_or_default();
+                        }
                         project = project_name(&cwd);
                         start = proc_start_token(pid).unwrap_or(0);
                         loaded = true;
@@ -188,30 +194,47 @@ fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
         _ => return None,
     };
 
-    let sa_bytes = &buf[44..44 + 128];
-    let (addr, port) = match domain {
-        AF_INET => {
-            let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
-            let ip = Ipv4Addr::new(sa_bytes[4], sa_bytes[5], sa_bytes[6], sa_bytes[7]);
-            (ip.to_string(), port)
-        }
-        AF_INET6 => {
-            let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
-            let ip_bytes: [u8; 16] = sa_bytes[8..24].try_into().ok()?;
-            let ip = Ipv6Addr::from(ip_bytes);
-            (ip.to_string(), port)
-        }
-        _ => return None,
+    // struct sockaddr_storage is 8-byte aligned, starting at offset 48 (offset 44..48 is padding)
+    let sa_offset =
+        if buf.len() >= 48 + 128 && (buf[49] == AF_INET as u8 || buf[49] == AF_INET6 as u8) {
+            48
+        } else if buf.len() >= 44 + 128 && (buf[45] == AF_INET as u8 || buf[45] == AF_INET6 as u8) {
+            44
+        } else {
+            48
+        };
+
+    let sa_bytes = buf.get(sa_offset..sa_offset + 128)?;
+    let sa_family = sa_bytes[1] as i32;
+
+    let (addr, port) = if sa_family == AF_INET || domain == AF_INET {
+        let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
+        let ip = Ipv4Addr::new(sa_bytes[4], sa_bytes[5], sa_bytes[6], sa_bytes[7]);
+        (ip.to_string(), port)
+    } else if sa_family == AF_INET6 || domain == AF_INET6 {
+        let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
+        let ip_bytes: [u8; 16] = sa_bytes[8..24].try_into().ok()?;
+        let ip = Ipv6Addr::from(ip_bytes);
+        (ip.to_string(), port)
+    } else {
+        return None;
     };
 
     if port == 0 {
         return None;
     }
 
-    if is_tcp && buf.len() >= 308 {
-        let state = i32::from_ne_bytes(buf[300..304].try_into().unwrap_or([0; 4]));
-        if state != TCPS_LISTEN {
-            return None;
+    if is_tcp {
+        let state_offset = sa_offset + 128 + 128;
+        if buf.len() >= state_offset + 4 {
+            let state = i32::from_ne_bytes(
+                buf[state_offset..state_offset + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            );
+            if state != TCPS_LISTEN && state != 0 {
+                return None;
+            }
         }
     }
 

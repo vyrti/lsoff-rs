@@ -9,11 +9,9 @@
 
 ---
 
-## 📖 Origin & Lineage
+## Origin
 
 `lsoff-rs` is a high-performance Rust rewrite of the popular Go CLI tool [`lsoff`](https://github.com/yutat23/lsoff) created by [Yuta Takahashi](https://github.com/yutat23).
-
-While the original Go implementation provides great utility, `lsoff-rs` was engineered from scratch to push operating system socket discovery and process introspection to its **theoretical physical limits** on modern multi-core hardware.
 
 ---
 
@@ -78,23 +76,7 @@ While the original Go implementation provides great utility, `lsoff-rs` was engi
 | **Runtime Overhead** | Bundles Go GC, scheduler, reflection | **Zero runtime (pure native binary)** | Instant cold-start |
 
 ---
-
-## What Rust Can Do That Go Fundamentally Cannot
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                  RUST vs GO ARCHITECTURE                               │
-├───────────────────────────────────────────┬────────────────────────────────────────────┤
-│                    RUST                   │                     GO                     │
-├───────────────────────────────────────────┼────────────────────────────────────────────┤
-│ • Zero-overhead C FFI (direct assembly)   │ • CGo overhead (~50-100ns context switch)  │
-│ • True stack buffers & zero GC pauses     │ • GC runtime, heap escapes & STW pauses    │
-│ • Native in-kernel eBPF bytecode (Aya)    │ • Requires C / clang toolchain wrappers    │
-│ • Lean binary (~670 KB, instant startup)  │ • Bundled runtime (~5 MB binary)           │
-│ • Thread pinning & Mach QoS scheduling    │ • Abstracted M/P goroutine scheduler       │
-│ • RAII deterministic resource cleanup     │ • Finalizers & garbage collector sweeps    │
-└───────────────────────────────────────────┴────────────────────────────────────────────┘
-```
+### Rust vs Go
 
 1. **Zero-Overhead Direct FFI (No CGo Context Switching)**:
    - In Go, calling C functions (`cgo`) requires the runtime to switch goroutine stacks, switch from the green-thread scheduler to an OS thread, and save register contexts, costing **~50–100 ns per call**. Across 1,500+ kernel syscalls, Go wastes significant CPU time purely on CGo switching.
