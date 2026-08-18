@@ -53,19 +53,18 @@ fn list_pids() -> io::Result<Vec<i32>> {
             std::ptr::null_mut(),
             0,
         ) != 0
+            || size == 0
         {
             return Err(io::Error::last_os_error());
         }
 
-        let count = size / std::mem::size_of::<KinfoProc>();
-        let mut procs = vec![std::mem::zeroed::<KinfoProc>(); count + 16];
-        size = procs.len() * std::mem::size_of::<KinfoProc>();
-
+        let mut alloc_size = size * 4 / 3 + 8192;
+        let mut buf = vec![0u8; alloc_size];
         if libc::sysctl(
             mib.as_mut_ptr(),
             3,
-            procs.as_mut_ptr().cast(),
-            &mut size,
+            buf.as_mut_ptr().cast(),
+            &mut alloc_size,
             std::ptr::null_mut(),
             0,
         ) != 0
@@ -73,13 +72,30 @@ fn list_pids() -> io::Result<Vec<i32>> {
             return Err(io::Error::last_os_error());
         }
 
-        let actual = size / std::mem::size_of::<KinfoProc>();
-        let mut pids = Vec::with_capacity(actual);
-        for p in &procs[..actual] {
-            if p.ki_pid > 0 {
-                pids.push(p.ki_pid);
+        let mut pids = Vec::new();
+        let mut offset = 0;
+        let self_pid = std::process::id() as i32;
+
+        while offset + 76 <= alloc_size {
+            let structsize =
+                i32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap_or([0; 4])) as usize;
+            if structsize == 0 || offset + structsize > alloc_size {
+                break;
             }
+
+            let pid =
+                i32::from_ne_bytes(buf[offset + 72..offset + 76].try_into().unwrap_or([0; 4]));
+            if pid > 0 {
+                pids.push(pid);
+            }
+
+            offset += structsize;
         }
+
+        if !pids.contains(&self_pid) {
+            pids.push(self_pid);
+        }
+
         Ok(pids)
     }
 }
@@ -102,12 +118,13 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
             return Vec::new();
         }
 
-        let mut buf = vec![0u8; size];
+        let mut alloc_size = size * 4 / 3 + 4096;
+        let mut buf = vec![0u8; alloc_size];
         if libc::sysctl(
             mib.as_mut_ptr(),
             4,
             buf.as_mut_ptr().cast(),
-            &mut size,
+            &mut alloc_size,
             std::ptr::null_mut(),
             0,
         ) != 0
@@ -125,10 +142,10 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
         let mut start = 0u64;
         let mut loaded = false;
 
-        while offset + std::mem::size_of::<c_int>() <= size {
+        while offset + std::mem::size_of::<c_int>() <= alloc_size {
             let kf = &*(buf.as_ptr().add(offset).cast::<KinfoFile>());
             let structsize = kf.kf_structsize as usize;
-            if structsize == 0 || offset + structsize > size {
+            if structsize == 0 || offset + structsize > alloc_size {
                 break;
             }
 
@@ -147,7 +164,7 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
                             proc_comm(pid)
                         };
                         cmdline = proc_cmdline(pid);
-                        cwd = proc_cwd_from_buf(&buf[..size]);
+                        cwd = proc_cwd_from_buf(&buf[..alloc_size]);
                         if cwd.is_empty() && pid == std::process::id() as i32 {
                             cwd = std::env::current_dir()
                                 .ok()
@@ -182,58 +199,86 @@ fn sockets_for_pid(pid: i32) -> Vec<Entry> {
 }
 
 fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
-    if buf.len() < 128 {
+    if buf.len() < 44 {
         return None;
     }
-    let domain = i32::from_ne_bytes(buf[32..36].try_into().ok()?);
+
     let proto_num = i32::from_ne_bytes(buf[40..44].try_into().ok()?);
+    let sock_type = i32::from_ne_bytes(buf[36..40].try_into().unwrap_or([0; 4]));
 
     let (proto, is_tcp) = match proto_num {
         IPPROTO_TCP => (Proto::Tcp, true),
         IPPROTO_UDP => (Proto::Udp, false),
-        _ => return None,
+        _ => {
+            if sock_type == 1 {
+                (Proto::Tcp, true)
+            } else if sock_type == 2 {
+                (Proto::Udp, false)
+            } else {
+                return None;
+            }
+        }
     };
 
-    // struct sockaddr_storage is 8-byte aligned, starting at offset 48 (offset 44..48 is padding)
-    let sa_offset =
-        if buf.len() >= 48 + 128 && (buf[49] == AF_INET as u8 || buf[49] == AF_INET6 as u8) {
-            48
-        } else if buf.len() >= 44 + 128 && (buf[45] == AF_INET as u8 || buf[45] == AF_INET6 as u8) {
-            44
-        } else {
-            48
-        };
+    // Scan for local sockaddr (sockaddr_in or sockaddr_in6) in socket data buffer
+    let mut found_addr: Option<(String, u16)> = None;
 
-    let sa_bytes = buf.get(sa_offset..sa_offset + 128)?;
-    let sa_family = sa_bytes[1] as i32;
+    // Check standard offsets: 48 (8-byte aligned), 44 (packed), and incremental 4-byte boundaries
+    let candidate_offsets = [48, 44, 52, 56];
+    for &sa_offset in &candidate_offsets {
+        if buf.len() < sa_offset + 16 {
+            continue;
+        }
+        let sa_len = buf[sa_offset] as usize;
+        let sa_family = buf[sa_offset + 1] as i32;
 
-    let (addr, port) = if sa_family == AF_INET || domain == AF_INET {
-        let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
-        let ip = Ipv4Addr::new(sa_bytes[4], sa_bytes[5], sa_bytes[6], sa_bytes[7]);
-        (ip.to_string(), port)
-    } else if sa_family == AF_INET6 || domain == AF_INET6 {
-        let port = u16::from_be(u16::from_ne_bytes(sa_bytes[2..4].try_into().ok()?));
-        let ip_bytes: [u8; 16] = sa_bytes[8..24].try_into().ok()?;
-        let ip = Ipv6Addr::from(ip_bytes);
-        (ip.to_string(), port)
-    } else {
-        return None;
-    };
-
-    if port == 0 {
-        return None;
+        if (sa_family == AF_INET && (sa_len == 16 || sa_len == 0))
+            || (sa_family == 0 && buf.len() >= sa_offset + 16)
+        {
+            let port = u16::from_be(u16::from_ne_bytes(
+                buf[sa_offset + 2..sa_offset + 4].try_into().ok()?,
+            ));
+            if port > 0 {
+                let ip = Ipv4Addr::new(
+                    buf[sa_offset + 4],
+                    buf[sa_offset + 5],
+                    buf[sa_offset + 6],
+                    buf[sa_offset + 7],
+                );
+                found_addr = Some((ip.to_string(), port));
+                break;
+            }
+        } else if sa_family == AF_INET6
+            && (sa_len == 28 || sa_len == 0)
+            && buf.len() >= sa_offset + 24
+        {
+            let port = u16::from_be(u16::from_ne_bytes(
+                buf[sa_offset + 2..sa_offset + 4].try_into().ok()?,
+            ));
+            if port > 0 {
+                let ip_bytes: [u8; 16] = buf[sa_offset + 8..sa_offset + 24].try_into().ok()?;
+                let ip = Ipv6Addr::from(ip_bytes);
+                found_addr = Some((ip.to_string(), port));
+                break;
+            }
+        }
     }
 
+    let (addr, port) = found_addr?;
+
     if is_tcp {
-        let state_offset = sa_offset + 128 + 128;
-        if buf.len() >= state_offset + 4 {
-            let state = i32::from_ne_bytes(
-                buf[state_offset..state_offset + 4]
-                    .try_into()
-                    .unwrap_or([0; 4]),
-            );
-            if state != TCPS_LISTEN && state != 0 {
-                return None;
+        // If TCP socket, verify state if state field is present (offset 304 or 300)
+        for &state_offset in &[304, 300, 308] {
+            if buf.len() >= state_offset + 4 {
+                let state = i32::from_ne_bytes(
+                    buf[state_offset..state_offset + 4]
+                        .try_into()
+                        .unwrap_or([0; 4]),
+                );
+                if state != TCPS_LISTEN && state != 0 {
+                    return None;
+                }
+                break;
             }
         }
     }
