@@ -268,17 +268,21 @@ fn parse_kinfo_socket(buf: &[u8]) -> Option<(Proto, u16, String)> {
 
     if is_tcp {
         // In FreeBSD kf_sock, kf_sa_peer immediately follows kf_sa_local (+128 bytes).
-        // For a listening TCP socket, peer port is 0 (unconnected).
-        // For an outgoing established connection, peer port is > 0.
+        // For an unconnected / listening TCP socket, peer is uninitialized/zeroed (peer_len == 0 or peer_family == 0).
+        // For an outgoing established connection, peer_family is valid (AF_INET/AF_INET6), peer_len > 0, and peer_port > 0.
         let peer_offset = sa_offset + 128;
         if buf.len() >= peer_offset + 4 {
-            let peer_port = u16::from_be(u16::from_ne_bytes(
-                buf[peer_offset + 2..peer_offset + 4]
-                    .try_into()
-                    .unwrap_or([0; 2]),
-            ));
-            if peer_port > 0 {
-                return None;
+            let peer_len = buf[peer_offset] as usize;
+            let peer_family = buf[peer_offset + 1] as i32;
+            if (peer_family == AF_INET || peer_family == AF_INET6) && peer_len > 0 {
+                let peer_port = u16::from_be(u16::from_ne_bytes(
+                    buf[peer_offset + 2..peer_offset + 4]
+                        .try_into()
+                        .unwrap_or([0; 2]),
+                ));
+                if peer_port > 0 {
+                    return None;
+                }
             }
         }
     }
