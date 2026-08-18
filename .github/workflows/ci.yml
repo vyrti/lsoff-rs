@@ -15,20 +15,18 @@ on:
         options:
           - test
           - release
-          - docker
           - test-freebsd-aarch64
           - release-freebsd-aarch64
         required: true
         default: 'test'
       tag_name:
-        description: 'Required for "release", "release-freebsd-aarch64", or "docker" task: The tag for the action (e.g., v0.1.0)'
+        description: 'Required for "release" or "release-freebsd-aarch64" task: The tag for the action (e.g., v0.1.0)'
         required: false
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   BINARY_NAME: lsoff-rs
-  IMAGE_NAME: lsoff-rs
 
 jobs:
   format:
@@ -315,8 +313,12 @@ jobs:
           if [ "${{ runner.os }}" == "Windows" ]; then
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}.exe" dist_pkg/
             cp README.md dist_pkg/ || true
-            powershell Compress-Archive -Path dist_pkg/* -DestinationPath "$ASSET_NAME"
-            powershell "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" | tee "$ASSET_NAME.sha256"
+            powershell -Command "Compress-Archive -Path 'dist_pkg/*' -DestinationPath '$ASSET_NAME'"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
+            else
+              powershell -Command "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" > "$ASSET_NAME.sha256"
+            fi
           else
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}" dist_pkg/
             cp README.md dist_pkg/ || true
@@ -412,58 +414,3 @@ jobs:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || github.ref_name }}
           draft: true
           files: release-artifacts/*/*
-
-  build_and_push_docker:
-    name: Build and Push Docker Image
-    if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'docker')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Determine Version Tag
-        id: get_version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            if [ -z "${{ github.event.inputs.tag_name }}" ]; then
-              echo "Error: The 'tag_name' input is required when running the '${{ github.event.inputs.task_to_run }}' task manually."
-              exit 1
-            fi
-            echo "TAG=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ steps.get_version.outputs.TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.get_version.outputs.TAG }}
-            type=semver,pattern={{major}},value=${{ steps.get_version.outputs.TAG }}
-            type=raw,value=latest,enable=${{ startsWith(steps.get_version.outputs.TAG, 'v') }}
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
