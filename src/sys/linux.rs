@@ -211,17 +211,14 @@ fn build_inode_pid_map() -> HashMap<u64, i32> {
             let fd_path = format!("/proc/{pid}/fd");
             if let Ok(fd_entries) = fs::read_dir(fd_path) {
                 for fd in fd_entries.flatten() {
-                    if let Ok(target) = fs::read_link(fd.path()) {
-                        if let Some(target_str) = target.to_str() {
-                            if let Some(inode_str) = target_str
-                                .strip_prefix("socket:[")
-                                .and_then(|s| s.strip_suffix(']'))
-                            {
-                                if let Ok(inode) = inode_str.parse::<u64>() {
-                                    map.insert(inode, pid);
-                                }
-                            }
-                        }
+                    if let Ok(target) = fs::read_link(fd.path())
+                        && let Some(target_str) = target.to_str()
+                        && let Some(inode_str) = target_str
+                            .strip_prefix("socket:[")
+                            .and_then(|s| s.strip_suffix(']'))
+                        && let Ok(inode) = inode_str.parse::<u64>()
+                    {
+                        map.insert(inode, pid);
                     }
                 }
             }
