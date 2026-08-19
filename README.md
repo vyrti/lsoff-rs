@@ -13,7 +13,7 @@
 
 ## Origin
 
-`lsoff-rs` is a high-performance Rust rewrite of the popular Go CLI tool [`lsoff`](https://github.com/yutat23/lsoff) created by [Yuta Takahashi](https://github.com/yutat23).
+`lsoff-rs` is a high-performance Rust rewrite of the popular Go CLI tool [`lsoff`](https://github.com/yutat23/lsoff) created by [yutat23](https://github.com/yutat23).
 
 ---
 
@@ -161,4 +161,4 @@ Dual-licensed under either:
 - **MIT License** ([LICENSE-MIT](LICENSE-MIT))
 - **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
 
-Original Go project by [Yuta Takahashi](https://github.com/yutat23/lsoff) licensed under MIT.
+Original Go project by [yutat23](https://github.com/yutat23/lsoff) licensed under MIT.
