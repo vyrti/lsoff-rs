@@ -4,7 +4,6 @@
 > Inspect, search, filter, and kill listening network ports with a beautiful interactive TUI or scriptable CLI.
 
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#installation)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#features)
 
 ![lsoff-rs demo](lsoff-rs.jpg)
