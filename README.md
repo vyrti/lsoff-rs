@@ -88,12 +88,7 @@
 ### Build from Source
 ```bash
 cargo install lsoff-rs
-
-git clone https://github.com/alex/lsoff-rs.git
-cd lsoff-rs
-cargo build --release
 ```
-The optimized binary will be available at `./target/release/lsoff-rs`.
 
 ### Downloading
 Take latest release from [GitHub Releases](https://github.com/vyrti/lsoff-rs/releases).
